@@ -1,3 +1,5 @@
+from ast import List
+from pprint import pprint
 from google import genai
 import google.ai.generativelanguage as glm
 from google.api_core import retry
@@ -10,20 +12,21 @@ import typing_extensions
 import sys
 import time
 from pathlib import Path
-import langgraph
-from langgraph.graph import StateGraph, END
-import operator
-from typing import Annotated, Sequence
-from google.ai.generativelanguage import FunctionCall, Part as GlmPart, FunctionResponse
+import readline
 
 # --- Constants ---
-KAGGLE_WORKING_DIR = Path("/kaggle/working/")
-USER_DATA_FILE = KAGGLE_WORKING_DIR / "user_data.json"
-DAILY_FEELING_FILE = KAGGLE_WORKING_DIR / "daily_feelings.json"
-WORKOUT_DATA_FILE = KAGGLE_WORKING_DIR / "workout_data.json"
-WEEKLY_SUMMARY_FILE = KAGGLE_WORKING_DIR / "weekly_summaries.json"
-MONTHLY_STATS_FILE = KAGGLE_WORKING_DIR / "monthly_stats.json"
-WORKOUT_PLAN_FILE = KAGGLE_WORKING_DIR / "current_workout_plan.json" # To store the latest plan
+if os.environ.get("KAGGLE_WORKING_DIR"):
+    WORKING_DIR = Path("/kaggle/working/")
+else:
+    WORKING_DIR = Path.cwd()
+
+
+USER_DATA_FILE = WORKING_DIR / "user_data.json"
+DAILY_FEELING_FILE = WORKING_DIR / "daily_feelings.json"
+WORKOUT_DATA_FILE = WORKING_DIR / "workout_data.json"
+WEEKLY_SUMMARY_FILE = WORKING_DIR / "weekly_summaries.json"
+MONTHLY_STATS_FILE = WORKING_DIR / "monthly_stats.json"
+WORKOUT_PLAN_FILE = WORKING_DIR / "current_workout_plan.json" # To store the latest plan
 
 # --- API Key Configuration (IMPORTANT for Kaggle) ---
 # Ensure you add your GOOGLE_API_KEY as a secret in Kaggle
@@ -86,75 +89,421 @@ def date_decoder(json_dict):
     return json_dict
 
 # --- 5. Static User Data ---
-class StaticUserData(typing_extensions.TypedDict):
+class StaticUserData(typing.TypedDict):
     """Stores baseline user information relevant for training plan personalization."""
-    name: typing.Optional[str]
-    age: typing.Optional[int]
-    height_inches: typing.Optional[float]
-    gender: typing.Optional[str]
-    goal: typing.Optional[str]
-    goal_time: typing.Optional[str] # Keep as string for flexibility (e.g., "sub 2:30")
-    goal_date: typing.Optional[str]
-    preferred_training_days: typing.Optional[typing.List[str]]
-    long_run_day: typing.Optional[str]
-    notes: typing.Optional[str]
+    name: str  # User's name
+    age: int  # User's age in years
+    height_inches: typing.Optional[float] # User's height in inches (optional)
+    gender: typing.Optional[str] # User's reported gender (optional, e.g., "Male", "Female", "Non-binary", "Prefer not to say")
+     # --- Goal --- 
+    goal: str  # User's primary goal (e.g., "5K", "10K", "Half Marathon", "Marathon", "Ultra", "Other")
+    goal_time: typing.Optional[str]  # Target time for the goal (e.g., 2.5 for 2 hours 30 minutes)
+    goal_date: datetime  # Date of the user would like to be ready for their goal. (e.g., "2024-05-15")
+     # --- Training Preferences (Optional) ---
+    preferred_training_days: typing.Optional[typing.List[str]] # Days user prefers to train (e.g., ["Monday", "Wednesday", "Friday", "Sunday"])
+    long_run_day: typing.Optional[str] # Preferred day for the weekly long run (e.g., "Saturday")
+     # --- Other Optional Data ---
+    notes: typing.Optional[str]  # Optional free-text notes for additional context
+
+StaticUserDataSchema = """
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StaticUserData",
+  "description": "Stores baseline user information relevant for training plan personalization.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "User's name",
+      "type": ["string", "null"]
+    },
+    "age": {
+      "description": "User's age in years",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "height_inches": {
+      "description": "User's height in inches (optional)",
+      "type": ["number", "null"],
+       "exclusiveMinimum": 0
+    },
+    "gender": {
+      "description": "User's reported gender (optional, e.g., \"Male\", \"Female\", \"Non-binary\", \"Prefer not to say\")",
+      "type": ["string", "null"]
+    },
+    "goal": {
+      "description": "User's primary goal (e.g., \"5K\", \"10K\", \"Half Marathon\", \"Marathon\", \"Ultra\", \"Other\")",
+      "type": ["string", "null"]
+    },
+    "goal_time": {
+      "description": "Target time for the goal (e.g., \"sub 2:30\" or 2.5 for 2 hours 30 minutes)",
+      "type": ["string", "null"]
+    },
+    "goal_date": {
+      "description": "Date user would like to be ready for their goal (e.g., \"2024-09-15\")",
+       "type": ["string", "null"],
+       "format": "date-time"
+    },
+    "preferred_training_days": {
+      "description": "Days user prefers to train (e.g., [\"Monday\", \"Wednesday\", \"Friday\", \"Sunday\"])",
+      "type": ["array", "null"],
+      "items": {
+        "type": "string"
+      }
+    },
+    "long_run_day": {
+      "description": "Preferred day for the weekly long run (e.g., \"Saturday\")",
+      "type": ["string", "null"]
+    },
+    "notes": {
+      "description": "Optional free-text notes for additional context",
+      "type": ["string", "null"]
+    }
+  },
+   "required": []
+}
+"""
 
 # --- 1. Daily User Feeling ---
-class DailyUserFeeling(typing_extensions.TypedDict):
+class DailyUserFeeling(typing.TypedDict):
     """Subjective user input regarding their physical and mental state on a specific day."""
-    date: date
-    overall_feeling: int
-    energy_level: int
-    shin_pain: int
-    sleep_quality: int
-    stress_level: typing.Optional[int]
-    hydration_level: typing.Optional[int]
-    nutrition_quality: typing.Optional[int]
-    notes: typing.Optional[str]
+    date: datetime  # The date this feeling log applies to
+    overall_feeling: int  # Rating scale, e.g., 1 (Very Poor) to 5 (Excellent)
+    energy_level: int  # Rating scale, e.g., 1 (Very Low) to 5 (Very High)
+    shin_pain: int  # Rating scale, e.g., 0 (None) to 5 (Severe)
+    sleep_quality: int  # Rating scale, e.g., 1 (Very Poor) to 5 (Excellent)
+    stress_level: typing.Optional[int]  # Optional: 1 (Very Low) to 5 (Very High)
+    hydration_level: typing.Optional[int]  # 1 (Poor) to 5 (Excellent). Note that this represents the previous day
+    nutrition_quality: typing.Optional[int]  # 1 (Poor) to 5 (Excellent). Note that this represents the previous day
+    notes: typing.Optional[str]  # Optional free-text notes
+
+DailyUserFeelingSchema = """
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DailyUserFeeling",
+  "description": "Subjective user input regarding their physical and mental state on a specific day.",
+  "type": "object",
+  "properties": {
+    "date": {
+      "description": "The date this feeling log applies to",
+      "type": "string",
+      "format": "date-time"
+    },
+    "overall_feeling": {
+      "description": "Rating scale, e.g., 1 (Very Poor) to 5 (Excellent)",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "energy_level": {
+      "description": "Rating scale, e.g., 1 (Very Low) to 5 (Very High)",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "shin_pain": {
+      "description": "Rating scale, e.g., 0 (None) to 5 (Severe)",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+    },
+    "sleep_quality": {
+      "description": "Rating scale, e.g., 1 (Very Poor) to 5 (Excellent)",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "stress_level": {
+      "description": "Optional: 1 (Very Low) to 5 (Very High)",
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 5
+    },
+    "hydration_level": {
+      "description": "1 (Poor) to 5 (Excellent). Note that this represents the previous day",
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 5
+    },
+    "nutrition_quality": {
+      "description": "1 (Poor) to 5 (Excellent). Note that this represents the previous day",
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 5
+    },
+    "notes": {
+      "description": "Optional free-text notes",
+      "type": ["string", "null"]
+    }
+  },
+  "required": [
+    "date",
+    "overall_feeling",
+    "energy_level",
+    "shin_pain",
+    "sleep_quality"
+  ]
+}
+"""
 
 # --- 2. Workout Data ---
-class WorkoutData(typing_extensions.TypedDict):
+class WorkoutData(typing.TypedDict):
     """Data for a single workout session (running or other types)."""
-    date: date
-    workout_type: str
-    perceived_exertion: int # Made mandatory as it's often key
-    shin_and_knee_pain: int
-    shin_tightness: int
-    workout_adherence: int
-    actual_duration_minutes: float
-    actual_distance_miles: typing.Optional[float]
-    average_pace_minutes_per_mile: typing.Optional[float]
+    date: datetime  # Date of the workout
+    workout_type: str  # E.g., "Easy Run", "Tempo", "Strength", "Yoga", "Cycling", "Other"
+    perceived_exertion: int  # Optional: RPE scale 1-10
+    shin_and_knee_pain: int  # Optional: 0 (None) to 5 (Severe) (Specific to this user's shin pain)
+    shin_tightness: int  # Optional: 0 (None) to 5 (Severe) (Specific to this user's shin tightness)
+    workout_adherence: int # Percent adherence to the planned workout (0-100%)
+    actual_duration_minutes: float # Total workout time in minutes
+    actual_distance_miles: typing.Optional[float]  # Distance in miles (None if not applicable)
+    average_pace_minutes_per_mile: typing.Optional[float]  # Pace in min/mile (None if not applicable)
     average_heart_rate_bpm: typing.Optional[int]
     max_heart_rate_bpm: typing.Optional[int]
-    elevation_gain_feet: typing.Optional[float]
-    notes: typing.Optional[str]
+    elevation_gain_feet: typing.Optional[float]  # Elevation gain in feet (None if not applicable)
+    notes: typing.Optional[str]  # User comments, could include exercises/sets/reps for strength
+
+WorkoutDataSchema = """
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WorkoutData",
+  "description": "Data for a single workout session (running or other types).",
+  "type": "object",
+  "properties": {
+    "date": {
+      "description": "Date of the workout",
+      "type": "string",
+      "format": "date-time"
+    },
+    "workout_type": {
+      "description": "E.g., \"Easy Run\", \"Tempo\", \"Strength\", \"Yoga\", \"Cycling\", \"Other\"",
+      "type": "string"
+    },
+    "perceived_exertion": {
+      "description": "RPE scale 1-10 (Made mandatory as it's often key)",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10
+    },
+    "shin_and_knee_pain": {
+      "description": "0 (None) to 5 (Severe) (Specific to this user's shin pain)",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+    },
+    "shin_tightness": {
+      "description": "0 (None) to 5 (Severe) (Specific to this user's shin tightness)",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+    },
+    "workout_adherence": {
+      "description": "Percent adherence to the planned workout (0-100%)",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "actual_duration_minutes": {
+      "description": "Total workout time in minutes",
+      "type": "number",
+       "exclusiveMinimum": 0
+    },
+    "actual_distance_miles": {
+      "description": "Distance in miles (None if not applicable)",
+      "type": ["number", "null"],
+       "minimum": 0
+    },
+    "average_pace_minutes_per_mile": {
+      "description": "Pace in min/mile (None if not applicable)",
+      "type": ["number", "null"],
+       "minimum": 0
+    },
+    "average_heart_rate_bpm": {
+      "description": "Average Heart Rate (BPM) if tracked",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "max_heart_rate_bpm": {
+      "description": "Max Heart Rate (BPM) if tracked",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "elevation_gain_feet": {
+      "description": "Elevation gain in feet (None if not applicable)",
+      "type": ["number", "null"]
+    },
+    "notes": {
+      "description": "User comments, could include exercises/sets/reps for strength",
+      "type": ["string", "null"]
+    }
+  },
+  "required": [
+    "date",
+    "workout_type",
+    "perceived_exertion",
+    "shin_and_knee_pain",
+    "shin_tightness",
+    "workout_adherence",
+    "actual_duration_minutes"
+  ]
+}
+"""
 
 # --- 3. Weekly User Summary (More Qualitative) ---
-class WeeklyUserSummary(typing_extensions.TypedDict):
+class WeeklyUserSummary(typing.TypedDict):
     """A qualitative summary of the user's training week."""
-    week_start_date: date
-    overall_summary: str
-    key_achievements: typing.Optional[typing.List[str]]
-    areas_for_focus: typing.Optional[typing.List[str]]
-    total_workouts: int
+    week_start_date: datetime  # E.g., the Monday of the week
+    overall_summary: str  # Text summary of the week (consistency, feeling, progress)
+    key_achievements: typing.Optional[typing.List[str]]  # Bullet points of successes
+    areas_for_focus: typing.Optional[typing.List[str]]  # Bullet points for improvement areas
+    total_workouts: int # Total number of workouts logged this week
+    # Optional quantitative context if available/relevant
     total_running_distance_miles: typing.Optional[float]
     total_workout_duration_minutes: typing.Optional[float]
 
+WeeklyUserSummarySchema = """
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WeeklyUserSummary",
+  "description": "A qualitative summary of the user's training week.",
+  "type": "object",
+  "properties": {
+    "week_start_date": {
+      "description": "E.g., the Monday of the week",
+      "type": "string",
+      "format": "date-time"
+    },
+    "overall_summary": {
+      "description": "Text summary of the week (consistency, feeling, progress)",
+      "type": "string"
+    },
+    "key_achievements": {
+      "description": "Bullet points of successes",
+      "type": ["array", "null"],
+      "items": {
+        "type": "string"
+      }
+    },
+    "areas_for_focus": {
+      "description": "Bullet points for improvement areas",
+      "type": ["array", "null"],
+      "items": {
+        "type": "string"
+      }
+    },
+    "total_workouts": {
+      "description": "Total number of workouts logged this week",
+      "type": "integer",
+      "minimum": 0
+    },
+    "total_running_distance_miles": {
+      "description": "Optional quantitative context if available/relevant",
+      "type": ["number", "null"],
+       "minimum": 0
+    },
+    "total_workout_duration_minutes": {
+      "description": "Optional quantitative context if available/relevant",
+      "type": ["number", "null"],
+       "minimum": 0
+    }
+  },
+  "required": [
+    "week_start_date",
+    "overall_summary",
+    "total_workouts"
+  ]
+}
+"""
+
 # --- 4. Monthly User Stats (Primarily Quantitative Summary) ---
-class MonthlyUserStats(typing_extensions.TypedDict):
+class MonthlyUserStats(typing.TypedDict):
     """Aggregated user statistics for a specific month."""
     month: str  # Format: "YYYY-MM"
-    weight_pounds: float
-    max_heart_rate_bpm: typing.Optional[int]
-    resting_heart_rate_bpm: typing.Optional[int]
-    vo2_max_estimated: typing.Optional[float]
+    # --- Optional Physiological Estimates ---
+    weight_pounds: float # User's current weight in pounds
+    max_heart_rate_bpm: typing.Optional[int] # Max HR (optional, estimated or tested)
+    resting_heart_rate_bpm: typing.Optional[int] # Resting HR (optional)
+    vo2_max_estimated: typing.Optional[float] # Estimated VO2 Max (optional)
     longest_run_distance_miles: float
-    average_pace_minutes_per_mile: typing.Optional[float]
-    comfortable_pace_minutes_per_mile: typing.Optional[float]
-    comfortable_run_distance_miles: typing.Optional[float]
-    average_heart_rate_bpm: typing.Optional[int]
-    total_elevation_gain_feet: typing.Optional[float]
-    monthly_summary_notes: typing.Optional[str]
+    average_pace_minutes_per_mile: typing.Optional[float] # Avg pace for runs this month
+    comfortable_pace_minutes_per_mile: typing.Optional[float] # Comfortable pace for runs this month
+    comfortable_run_distance_miles: typing.Optional[float] # Avg comfortable run distance
+    average_heart_rate_bpm: typing.Optional[int] # Avg HR across workouts with HR data
+    total_elevation_gain_feet: typing.Optional[float] # Total elevation for runs
+    monthly_summary_notes: typing.Optional[str] # Optional field for brief LLM-generated or user notes
+
+MonthlyUserStatsSchema = """
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MonthlyUserStats",
+  "description": "Aggregated user statistics for a specific month.",
+  "type": "object",
+  "properties": {
+    "month": {
+      "description": "Format: \"YYYY-MM\"",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}$"
+    },
+    "weight_pounds": {
+      "description": "User's current weight in pounds",
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "max_heart_rate_bpm": {
+      "description": "Max HR (optional, estimated or tested)",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "resting_heart_rate_bpm": {
+      "description": "Resting HR (optional)",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "vo2_max_estimated": {
+      "description": "Estimated VO2 Max (optional)",
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "longest_run_distance_miles": {
+      "description": "Longest run distance this month",
+      "type": "number",
+      "minimum": 0
+    },
+    "average_pace_minutes_per_mile": {
+      "description": "Avg pace for runs this month",
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "comfortable_pace_minutes_per_mile": {
+      "description": "Comfortable pace for runs this month",
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "comfortable_run_distance_miles": {
+      "description": "Avg comfortable run distance",
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "average_heart_rate_bpm": {
+      "description": "Avg HR across workouts with HR data",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "total_elevation_gain_feet": {
+      "description": "Total elevation for runs",
+      "type": ["number", "null"]
+    },
+    "monthly_summary_notes": {
+      "description": "Optional field for brief LLM-generated or user notes",
+      "type": ["string", "null"]
+    }
+  },
+  "required": [
+    "month",
+    "weight_pounds",
+    "longest_run_distance_miles"
+  ]
+}
+"""
 
 print("JSON Type Definitions loaded.")
 
@@ -250,11 +599,11 @@ def upload_file_to_gemini(filepath: Path) -> typing.Optional[glm.File]:
     except Exception as e:
         print(f"Error uploading file {filepath.name} to Gemini: {e}")
         return None
-
+#  --- Get additional input from user ---
 def get_user_input_with_multimodal(prompt_text: str):
     """Gets text input and potentially file paths for multimodal input."""
     print(f"\n{prompt_text}")
-    user_text = input("Your text response (or type 'skip'): ")
+    user_text = input("Your text response (press enter to instead upload a file or type 'skip' to ignore this update): ")
     if user_text.lower() == 'skip':
         return []
 
@@ -264,415 +613,198 @@ def get_user_input_with_multimodal(prompt_text: str):
         if not file_path_str:
             break
 
-        # Assume paths are relative to /kaggle/input/ or /kaggle/working/
-        # It's crucial the user provides correct paths accessible by the Kaggle kernel
         file_path = Path(file_path_str)
         if not file_path.is_absolute():
-           # Try resolving relative to common Kaggle dirs if not absolute
-           possible_paths = [
-               KAGGLE_WORKING_DIR / file_path,
-               Path("/kaggle/input") / file_path, # Common for datasets
-           ]
-           found_path = None
-           for p in possible_paths:
-               if p.exists() and p.is_file():
-                   found_path = p
-                   break
-           if not found_path:
-                # Check if the original relative path exists from the current dir
-                if (Path.cwd() / file_path).exists() and (Path.cwd() / file_path).is_file():
-                    found_path = Path.cwd() / file_path
-                else:
-                    print(f"Error: Could not find file at '{file_path_str}' relative to common Kaggle directories or current directory.")
-                    continue # Ask for another file path
-           file_path = found_path # Use the resolved absolute path
+           # Try resolving relative to current directory
+           if (Path.cwd() / file_path).exists() and (Path.cwd() / file_path).is_file():
+               file_path = Path.cwd() / file_path
+           else:
+               print(f"Error: Could not find file at '{file_path_str}'.")
+               continue  # Ask for another file path
 
-
-        uploaded_file = upload_file_to_gemini(file_path)
-        if uploaded_file:
-            # IMPORTANT: Use Part.from_uri for uploaded files
+        try:
+            # The Gemini API client handles the upload process
+            uploaded_file = client.files.upload(file=file_path)
             files.append(uploaded_file)
             print(f"Added {file_path.name} to input.")
-        else:
-            print(f"Skipping file {file_path.name} due to upload error.")
+        except Exception as e:
+            print(f"Error uploading file {file_path.name} to Gemini: {e}")
 
     return user_text, files
 
+def parse_input_into_messages(user_text: str, user_files: list[glm.File]) -> list[ContentDict]:
+    """Prepares the initial message list for the first Gemini call."""
+    
+    messages = [
+        ContentDict(role="user", parts=[genai.types.Part.from_text(text=user_text)])
+    ]
+    for item in user_files:
+        messages.append(
+            ContentDict(role="user", parts=[genai.types.Part.from_uri(file_uri=item.uri, mime_type=item.mime_type)])
+        )
+    return messages
 
-# --- Function Calling Definition ---
-# Example function the LLM can call if it needs more info
-def request_more_user_info(
-    missing_fields: typing.List[str], # Which fields are unclear or missing
-    clarification_needed: str # Specific question to ask the user
-) -> str: # Return type annotation is important
-    """
-    Use this function ONLY when the user's input (text, images, audio, video)
-    is insufficient to fully populate the required JSON fields.
-    Ask the user for specific missing information or clarification.
-    """
-    print("\n--- AI Needs More Information ---")
-    print(f"Missing or unclear fields: {', '.join(missing_fields)}")
-    print(f"AI Request: {clarification_needed}")
-    print("---------------------------------")
-    # In a real app, you'd present this nicely and get structured user input.
-    # For this prototype, we'll just get raw input.
-    user_response = input("Please provide the requested information: ")
-    return user_response # Return the user's text response back to the LLM
 
-# --- Core AI Interaction Logic ---
-
-# --- LangGraph State Definition ---
-class StructuredOutputState(typing.TypedDict):
-    system_prompt: str
-    user_text: str
-    user_files: typing.List[glm.File]
-    output_schema: typing.Type[typing.TypedDict]
-    allow_function_calling: bool
-    messages: Annotated[Sequence[ContentDict], operator.add] # Accumulate messages
-    max_fc_loops: int
-    fc_loops: int
-    final_output: typing.Optional[dict]
-    error_message: typing.Optional[str]
 
 # --- LangGraph Nodes ---
 
-def prepare_initial_request(state: StructuredOutputState) -> StructuredOutputState:
-    """Prepares the initial message list for the first Gemini call."""
-    print("LangGraph: Preparing initial request...")
-    initial_messages = [
-        ContentDict(role="user", parts=[PartDict(text=state['user_text'])])
-    ]
-    for item in state.get('user_files', []):
-        initial_messages.append(
-             ContentDict(role="user", parts=[PartDict(file_data={
-                 "mime_type": item.mime_type,
-                 "file_uri": item.uri
-             })])
-        )
-    return {"messages": initial_messages, "fc_loops": 0}
-
-
-def call_gemini_node(state: StructuredOutputState) -> StructuredOutputState:
-    """Calls the Gemini API with the current state."""
-    loop_count = state['fc_loops']
-    print(f"\nLangGraph: Calling Gemini (Loop {loop_count + 1})...")
-
-    # Prepare tools and config for this call
-    tools_list = [request_more_user_info] if state['allow_function_calling'] else None
-
-    generation_config = genai.types.GenerateContentConfig(
-        temperature=0.2,
-        response_mime_type="application/json",
-        response_schema=state['output_schema'],
-        # tools=tools_list, # Pass tools directly now
-        # tool_config=tool_config,
-        # Pass system instruction if supported by the model/API version being used
-        # system_instruction=state['system_prompt'] # Pass directly to generate_content if needed
-    )
-
-    model_kwargs = {
-        "model": "gemini-1.5-flash", # Or "gemini-2.0-flash" as used before
-        "contents": state['messages'],
-        "generation_config": generation_config,
-        "tools": tools_list, # Pass tools here
-    }
-    # Add system instruction if using a model that supports it this way
-    if "1.5" in model_kwargs["model"]: # Check model name
-         model_kwargs["system_instruction"] = state['system_prompt']
-    else:
-         # For older models, prepend system prompt to contents if not directly supported
-         # model_kwargs["contents"] = [ContentDict(role="system", parts=[PartDict(text=state['system_prompt'])])] + state['messages']
-         print("Warning: System instruction might not be directly supported by the selected model in generate_content. Consider prepending to messages or upgrading model.")
-
-
-    try:
-        # Use the client defined earlier in the script
-        response = client.generate_content(**model_kwargs)
-
-        # Add the model's response (potentially including a function call) to messages
-        # Ensure we handle cases where response might be blocked or empty
-        if response.candidates and response.candidates[0].content.parts:
-            # IMPORTANT: Convert the Part object from the SDK response to a ContentDict for LangGraph state
-            # This assumes the response structure fits ContentDict expectations.
-            # You might need to manually construct the ContentDict if the structure differs.
-            response_content = response.candidates[0].content
-            # Directly using response_content which is already a Content type object
-            # Ensure it's serializable or convert to dict if needed by LangGraph state.
-            # If response_content is already dict-like or a Content object compatible with LangGraph's state addition:
-            return {"messages": [response_content]}
-        elif hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason:
-             error_msg = f"Gemini call blocked: {response.prompt_feedback.block_reason}"
-             print(f"Error: {error_msg}")
-             return {"error_message": error_msg, "final_output": None}
-        else:
-             error_msg = "Gemini response was empty or invalid."
-             print(f"Error: {error_msg}")
-             # print("Full Response:", response) # Debugging
-             return {"error_message": error_msg, "final_output": None}
-
-    except Exception as e:
-        print(f"Error during Gemini API call in LangGraph: {e}")
-        # print("Full Response (if available):", response) # Debugging
-        return {"error_message": str(e), "final_output": None}
-
-
-def process_response_node(state: StructuredOutputState) -> StructuredOutputState:
-    """Processes the Gemini response, checking for function calls or final output."""
-    print("LangGraph: Processing Gemini response...")
-    if not state['messages']:
-        print("Error: No messages found in state to process.")
-        return {"final_output": None, "error_message": "State has no messages."}
-
-    last_message = state['messages'][-1] # Get the latest message (model's response)
-
-    # Ensure last_message is ContentDict or similar dict structure
-    if not isinstance(last_message, dict) or 'parts' not in last_message:
-        # If it's a Content object, convert to dict or access attributes
-        # This depends on how LangGraph handles the objects internally when adding them
-        # Assuming it might be a Content object, let's try accessing attributes
-        if hasattr(last_message, 'parts') and last_message.parts:
-            # Convert parts if necessary, assuming parts are list of Part objects
-            parts_list = last_message.parts
-        else:
-            print("Error: Last message format is unexpected or has no parts.")
-            return {"final_output": None, "error_message": "Unexpected last message format."}
-    else: # It's already a dict
-         parts_list = last_message.get('parts', [])
-
-    if not parts_list:
-        print("Error: Last message from model has no parts.")
-        return {"final_output": None, "error_message": "Model response part is empty."}
-
-    # Process the first part (assuming structure)
-    # Part might be a Part object or a dict (PartDict)
-    part_data = parts_list[0]
-
-    # Check for function call
-    # Access function_call based on whether part_data is an object or dict
-    function_call = None
-    if hasattr(part_data, 'function_call'): # Check if it's an object with the attribute
-        function_call = part_data.function_call
-    elif isinstance(part_data, dict) and 'function_call' in part_data: # Check if it's a dict with the key
-        # If the value is a FunctionCall object, use it directly
-        # If it's already a dict, ensure it has 'name' and 'args'
-        fc_data = part_data['function_call']
-        if isinstance(fc_data, FunctionCall):
-             function_call = fc_data
-        elif isinstance(fc_data, dict) and 'name' in fc_data:
-             # Reconstruct FunctionCall object or use dict directly if FunctionResponse expects it
-             # For simplicity, assuming we might get a dict representation here
-             # Note: genai SDK FunctionCall expects args to be a MessageDict, not just dict
-             # We might need proper conversion if using the SDK object strictly
-              function_call = FunctionCall(name=fc_data.get('name'), args=fc_data.get('args', {})) # Basic reconstruction
-        # function_call = part_data.get('function_call') # Returns dict if PartDict was used
-
-    if function_call and state['allow_function_calling']:
-        print(f"Gemini requested function call: {function_call.name}")
-
-        if function_call.name == "request_more_user_info":
-            # Check loop limit
-            if state['fc_loops'] >= state['max_fc_loops']:
-                 print("Error: Maximum function call loops reached.")
-                 return {"final_output": None, "error_message": "Max function call loops reached."}
-
-            # Extract args and call local function
-            try:
-                # FunctionCall object has args attribute (mappingproxy)
-                args = dict(function_call.args)
-                missing = args.get('missing_fields', [])
-                clarification = args.get('clarification_needed', 'Could you provide more details?')
-            except Exception as e:
-                print(f"Error parsing function call arguments: {e}")
-                missing = []
-                clarification = "Could you provide more details or missing information?"
-
-            function_response_text = request_more_user_info(
-                missing_fields=missing,
-                clarification_needed=clarification
-            )
-
-            # Prepare function response message using ContentDict and PartDict
-            function_response_message = ContentDict(
-                role="function", # Role should be 'function' for the response
-                parts=[PartDict(function_response=FunctionResponse(
-                    name=function_call.name,
-                    response={"result": function_response_text}
-                ))]
-            )
-            print("Added function response to history.")
-            # We return the function response message to be added to the state
-            # The conditional edge will route back to call_gemini
-            return {"messages": [function_response_message], "fc_loops": state['fc_loops'] + 1}
-        else:
-            print(f"Warning: Received unhandled function call: {function_call.name}")
-            # Treat as end state, try to extract JSON anyway? Or error out?
-            # For now, let's try to extract JSON from potentially existing text part.
-            pass # Fall through to JSON extraction attempt
-
-    # Check for final JSON output (if no function call was processed)
-    # Access text based on whether part_data is an object or dict
-    text_content = None
-    if hasattr(part_data, 'text'):
-         text_content = part_data.text
-    elif isinstance(part_data, dict) and 'text' in part_data:
-         text_content = part_data.get('text')
-
-    if text_content:
-        try:
-            json_string = text_content
-            extracted_data = json.loads(json_string, object_hook=date_decoder)
-            if isinstance(extracted_data, dict):
-                print(f"Successfully extracted structured data for {state['output_schema'].__name__}.")
-                return {"final_output": extracted_data, "error_message": None}
-            else:
-                print(f"Error: Gemini response was not a valid JSON object. Response: {extracted_data}")
-                return {"final_output": None, "error_message": "Response was not a JSON object."}
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON response from Gemini: {e}")
-            print(f"Raw response text: {text_content}")
-            return {"final_output": None, "error_message": f"JSONDecodeError: {e}"}
-        except Exception as e:
-             print(f"Unexpected error processing final Gemini response text: {e}")
-             return {"final_output": None, "error_message": f"Unexpected processing error: {e}"}
-    else:
-         # This might happen if the model only returned a function call that wasn't handled
-         # Or if the response part genuinely didn't have text (e.g., only image)
-         if not function_call: # Only error if we didn't expect a function call
-             print("Error: No function call processed and no text part found in the final response.")
-             print(f"Final response: {part_data}")
-             return {"final_output": None, "error_message": "No text content in final response."}
-         else: # A function call was present but unhandled / we decided to stop
-              print("Info: No text content found, likely due to unhandled/terminal function call.")
-              return {"final_output": None, "error_message": "Function call received, but no further processing or text output."}
-
-
-# --- LangGraph Conditional Edge Logic ---
-
-def should_continue(state: StructuredOutputState) -> str:
-    """Determines whether to continue the loop (function call) or end."""
-    if state.get("error_message"): # If an error occurred in previous steps
-        print(f"LangGraph: Ending due to error: {state['error_message']}")
-        return END
-    if state.get("final_output") is not None: # If final JSON was extracted
-         print("LangGraph: Ending with final output.")
-         return END
-
-    if not state['messages']: return END # Safety check
-
-    last_message = state['messages'][-1]
-
-    # Check the role of the last message (must be dict compatible)
-    last_message_role = None
-    if isinstance(last_message, dict):
-        last_message_role = last_message.get('role')
-    elif hasattr(last_message, 'role'):
-        last_message_role = last_message.role
-
-
-    # Check if the last message was a function *response* we just added
-    if last_message_role == "function":
-         # We just processed a function call and added the response, continue to call Gemini again
-         if state['fc_loops'] < state['max_fc_loops']:
-              print("LangGraph: Continuing loop after function response.")
-              return "call_gemini"
-         else:
-              print("LangGraph: Ending loop, max retries reached after function call.")
-              # Update error message maybe?
-              # state["error_message"] = "Max function call loops reached." # State is immutable here
-              return END # Max loops reached
-
-    # If the last message was from the model and contained an *unhandled* function call,
-    # or if it was just text (and processing failed to extract JSON above), we end.
-    print("LangGraph: Ending (no function call processed or final JSON extracted).")
-    return END
-
-
-# --- Build the Graph ---
-
-def build_structured_output_graph():
-    workflow = StateGraph(StructuredOutputState)
-
-    # Add nodes
-    workflow.add_node("prepare_initial_request", prepare_initial_request)
-    workflow.add_node("call_gemini", call_gemini_node)
-    workflow.add_node("process_response", process_response_node)
-
-    # Set entry point
-    workflow.set_entry_point("prepare_initial_request")
-
-    # Add edges
-    workflow.add_edge("prepare_initial_request", "call_gemini")
-    workflow.add_edge("call_gemini", "process_response")
-
-    # Add conditional edge
-    workflow.add_conditional_edges(
-        "process_response",
-        should_continue,
-        {
-            "call_gemini": "call_gemini", # Loop back if function call was handled
-            END: END                   # End if finished or error
-        }
-    )
-
-    # Compile the graph
-    app = workflow.compile()
-    print("LangGraph compiled successfully.")
-    return app
-
-# --- Replace the Original Function ---
-
-structured_output_app = build_structured_output_graph() # Compile the graph once
-
-def call_gemini_for_structured_output_langgraph(
+def call_gemini_for_structured_output(
     system_prompt: str,
     user_text: str, # Changed from user_content
     user_files: typing.List[glm.File],
     output_schema: typing.Type[typing.TypedDict],
-    allow_function_calling: bool = False
-) -> typing.Optional[typing.Dict]:
-    """
-    Calls the Gemini API via LangGraph to process input and return structured JSON data,
-    handling function calls.
-    """
-    print(f"\nInvoking LangGraph for structured output ({output_schema.__name__})...")
+):
+    """Calls Gemini with function calling enabled to gather data."""
 
-    # Ensure user_text is a string
-    if not isinstance(user_text, str):
-        print(f"Warning: user_text was not a string ({type(user_text)}). Converting to string.")
-        # Attempt a reasonable conversion, e.g., joining if it's a list
-        if isinstance(user_text, list):
-            user_text = "\n".join(map(str, user_text))
+    messages = parse_input_into_messages(user_text, user_files)
+    sufficient_info = False
+
+    # --- Function that the LLM can call to request more information ---
+    def request_more_user_info(
+        missing_fields: list[str],  # Which fields are unclear or missing
+        clarification_needed: str  # Specific question to ask the user
+    ):
+        """
+        Called by the Gemini model when user input lacks required information.
+
+        This function prompts the user for specific missing details identified by the model.
+        It uses `get_user_input_with_multimodal` to gather text and optional file uploads
+        from the user and appends the new information to the global `messages` list
+        for subsequent model processing.
+
+        Args:
+            missing_fields: A list of field names (strings) that the model
+                             determined were missing or unclear from the user's input.
+            clarification_needed: The specific question the model wants to ask the user
+                                   to obtain the missing information.
+        """
+        prompt = "\n--- AI Needs More Information ---"
+        prompt += f"\nMissing or unclear fields: {', '.join(missing_fields)}"
+        prompt += f"\nAI Request: {clarification_needed}"
+        prompt += "\n---------------------------------"
+        # Note: Uses global `messages` which might be refactored later
+        new_user_text, new_user_files = get_user_input_with_multimodal(prompt)
+        # Append the new user input and any uploaded files to the message history
+        if new_user_text or new_user_files:
+             messages.append(parse_input_into_messages(new_user_text, new_user_files))
         else:
-            user_text = str(user_text)
+            # Handle case where user provides no input to the clarification request
+            # Maybe append a message indicating this? For now, just proceed.
+            print("User provided no further input for clarification.")
+
+    def proceed_to_json_generation():
+        """
+        Called by the Gemini model when it determines it has sufficient information.
+
+        This function signals that the information gathering phase is complete.
+        It sets the global `sufficient_info` flag to True, which terminates
+        the loop in `call_gemini_for_structured_output` and allows the process
+        to proceed to the final JSON generation step.
+        """
+        # Note: Uses global `sufficient_info` which might be refactored later
+        nonlocal sufficient_info
+        sufficient_info = True
+
+    model_name = "gemini-2.0-flash"  # @param ["gemini-2.0-flash-lite","gemini-2.0-flash","gemini-2.5-pro-exp-03-25"] {"allow-input":true}
+
+    max_loops = 3
+    loop_count = 0
+    while ((not sufficient_info) and (loop_count < max_loops)):
+        loop_count += 1
+        print(f"Calling Gemini ({client.models}) for structured output ({output_schema.__name__})...")
+        print(f"Sufficient info: {sufficient_info}")
+        print(f"Not sufficient info: {not sufficient_info}")
+        print(f"Loop count: {loop_count}")
+        print(f"Loop Status: {(not sufficient_info) and (loop_count < max_loops)}")
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                config=genai.types.GenerateContentConfig(
+                    tools=[request_more_user_info, proceed_to_json_generation],
+                    tool_config=genai.types.ToolConfig(
+                        function_calling_config=genai.types.FunctionCallingConfig(
+                            mode="ANY", allowed_function_names=["request_more_user_info", "proceed_to_json_generation"]
+                        )
+                    ),
+                    system_instruction=system_prompt,
+                    automatic_function_calling=genai.types.AutomaticFunctionCallingConfig(disable=True)
+                ),
+                contents=messages
+            )
+
+            tool_call = response.candidates[0].content.parts[0].function_call
+            messages.append(genai.types.ContentDict(role="user", parts=[genai.types.Part.from_text(text=f"NOTE: System replied with - Function call: {tool_call.name} with args: {tool_call.args}")]))
+            if tool_call.name == "proceed_to_json_generation":
+                print(f"Proceeding to JSON generation.")
+                proceed_to_json_generation()
+            elif tool_call.name == "request_more_user_info":
+                print(f"Requesting more user info.")
+                request_more_user_info(**tool_call.args)
+            else:
+                print(f"Unknown tool call: {tool_call.name}")
+                messages.append(genai.types.ContentDict(role="user", parts=[genai.types.Part.from_text(text=f"Unknown tool call: {tool_call.name}")]))
+        except Exception as e:
+            print(f"Error: {e}")
+            print(f"Messages: {messages}")
+            print(f"Response: {response}")
+            sys.exit()
+
+    print(messages)
 
 
-    initial_state = StructuredOutputState(
-        system_prompt=system_prompt,
-        user_text=user_text,
-        user_files=user_files,
-        output_schema=output_schema,
-        allow_function_calling=allow_function_calling,
-        messages=[], # Start with empty message list
-        max_fc_loops=3,
-        fc_loops=0,
-        final_output=None,
-        error_message=None
+    print(f"\nAttempting to generate JSON...")
+    # print("Messages:", messages) # Debugging: See what's being sent
+    # print("Tools:", tools_list) # Debugging: See tools being sent
+
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        config=genai.types.GenerateContentConfig(
+            temperature=0.2, # Lower temp for more deterministic JSON extraction
+            response_mime_type="application/json",
+            response_schema=output_schema
+        ),
+        contents=messages
     )
+    pprint(response)
 
-    # Invoke the graph
-    # Use configuration to handle recursion limits if necessary
-    final_state = structured_output_app.invoke(initial_state, config={"recursion_limit": 10})
+    # print("Raw Gemini Response:", response) # Debugging: See the full response
 
+    # --- Process Final Response ---
+    try:
+        if response.candidates and response.candidates[0].content.parts:
+             # Assuming the JSON is in the first part of the last message
+             final_part = response.candidates[0].content.parts[0]
+             if final_part.text: # Check if text part exists (where JSON is expected)
+                 # The API should directly return JSON parseable text when mime_type is set
+                 json_string = final_part.text
+                 # print(f"Received JSON string: {json_string}") # Debugging
+                 extracted_data = json.loads(json_string, object_hook=date_decoder)
 
-    # Return the final output from the state
-    if final_state and final_state.get("final_output"):
-        return final_state["final_output"]
-    else:
-        error_msg = final_state.get('error_message') if final_state else "Unknown error (final_state is None)"
-        print(f"LangGraph execution finished without producing valid output. Error: {error_msg}")
+                 # Basic validation (check if it's a dict)
+                 if isinstance(extracted_data, dict):
+                     print(f"Successfully extracted structured data for {output_schema.__name__}.")
+                     return extracted_data
+                 else:
+                     print(f"Error: Gemini response was not a valid JSON object for {output_schema.__name__}. Response: {extracted_data}")
+                     return None
+             else:
+                  print(f"Error: Gemini response part did not contain text for {output_schema.__name__}.")
+                  # print("Response Part:", final_part) # Debugging
+                  return None
+
+        else:
+            print(f"Error: No valid candidates or content parts in Gemini response for {output_schema.__name__}.")
+            # print("Full Response:", response) # Debugging
+            return None
+
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON response from Gemini for {output_schema.__name__}: {e}")
+        print(f"Raw response text: {response.candidates[0].content.parts[0].text}")
         return None
-
-# --- End of LangGraph Implementation ---
+    except Exception as e:
+        print(f"Unexpected error processing final Gemini response: {e}")
+        # print("Full Response:", response) # Debugging
+        return None
 
 
 # --- Data Collection Functions ---
@@ -685,7 +817,7 @@ def collect_static_user_data() -> typing.Optional[StaticUserData]:
     from the user to personalize their fitness plan. Ask clarifying questions if needed,
     but primarily focus on gathering the data for the required JSON format.
     Ensure dates are in YYYY-MM-DD format.
-    The required output format is JSON matching this structure: {StaticUserData.__annotations__}
+    The required output format is JSON matching this structure: {StaticUserDataSchema}
     """
     prompt = (
         "Welcome! Let's set up your fitness profile. Please tell me about yourself "
@@ -704,12 +836,11 @@ def collect_static_user_data() -> typing.Optional[StaticUserData]:
         return None
 
     # Allow function calling here if needed
-    extracted_data = call_gemini_for_structured_output_langgraph(
+    extracted_data = call_gemini_for_structured_output(
         system_prompt=system_prompt,
         user_text=user_text,
         user_files=user_files,
         output_schema=StaticUserData,
-        allow_function_calling=True # Allow requesting more info for user setup
     )
 
     if extracted_data:
@@ -725,7 +856,7 @@ def collect_daily_feeling(target_date: date) -> typing.Optional[DailyUserFeeling
     system_prompt = f"""
     You are an AI fitness coach assistant. Collect the user's subjective feeling for {target_date.isoformat()}.
     Focus on the ratings (1-5 or 0-5 scales as defined) and any notes.
-    The required output format is JSON matching this structure: {DailyUserFeeling.__annotations__}
+    The required output format is JSON matching this structure: {DailyUserFeelingSchema}
     Set the 'date' field to {target_date.isoformat()}.
     Remind the user that hydration and nutrition reflect the *previous* day.
     """
@@ -745,12 +876,11 @@ def collect_daily_feeling(target_date: date) -> typing.Optional[DailyUserFeeling
         print("User skipped daily feeling log.")
         return None
     
-    extracted_data = call_gemini_for_structured_output_langgraph(
+    extracted_data = call_gemini_for_structured_output(
         system_prompt=system_prompt,
         user_text=user_text,
         user_files=user_files,
         output_schema=DailyUserFeeling,
-        allow_function_calling=True # Allow asking for clarification
     )
 
     if extracted_data:
@@ -777,7 +907,7 @@ def collect_workout_data(target_date: date) -> typing.Optional[WorkoutData]:
     Extract quantitative data like duration, distance, pace, HR, elevation where provided.
     Capture perceived exertion (RPE 1-10) and specific pain/tightness ratings (0-5).
     Determine adherence percentage (0-100%).
-    The required output format is JSON matching this structure: {WorkoutData.__annotations__}
+    The required output format is JSON matching this structure: {WorkoutDataSchema}
     Set the 'date' field to {target_date.isoformat()}.
     """
     prompt = (
@@ -798,12 +928,10 @@ def collect_workout_data(target_date: date) -> typing.Optional[WorkoutData]:
         print("User skipped workout log.")
         return None
 
-    extracted_data = call_gemini_for_structured_output_langgraph(
+    extracted_data = call_gemini_for_structured_output(
         system_prompt=system_prompt,
-        user_text=user_text,
-        user_files=user_files,
+        user_content=user_content,
         output_schema=WorkoutData,
-        allow_function_calling=True # Allow asking for clarification
     )
 
     if extracted_data:
@@ -830,7 +958,7 @@ def collect_workout_data(target_date: date) -> typing.Optional[WorkoutData]:
 #    about the AI *generating* the summary based on the week's/month's data,
 #    possibly with some user confirmation/input. This is a more advanced step.
 
-def collect_weekly_summary(week_start_date: date, workouts: list[WorkoutData], feelings: list[DailyUserFeeling]) -> typing.Optional[WeeklyUserSummary]:
+def collect_weekly_summary(week_start_date: date, workouts: typing.List[WorkoutData], feelings: typing.List[DailyUserFeeling]) -> typing.Optional[WeeklyUserSummary]:
     """Collects or generates a weekly summary."""
     print(f"\n--- Logging Weekly Summary for week starting {week_start_date.isoformat()} ---")
 
@@ -848,7 +976,7 @@ def collect_weekly_summary(week_start_date: date, workouts: list[WorkoutData], f
     Base the summary on the provided workout logs and daily feelings for the week.
     Highlight consistency, overall feeling, progress, key achievements (e.g., longest run, PR), and areas needing focus (e.g., recurring pain, missed workouts).
     Calculate quantitative totals.
-    The required output format is JSON matching this structure: {WeeklyUserSummary.__annotations__}
+    The required output format is JSON matching this structure: {WeeklyUserSummarySchema}
     Set the 'week_start_date' field to {week_start_date.isoformat()}.
     Set 'total_workouts', 'total_running_distance_miles', and 'total_workout_duration_minutes' based on the calculations.
     """
@@ -880,12 +1008,11 @@ def collect_weekly_summary(week_start_date: date, workouts: list[WorkoutData], f
         full_context.append("User provided no additional input.")
 
 
-    extracted_data = call_gemini_for_structured_output_langgraph(
+    extracted_data = call_gemini_for_structured_output(
         system_prompt=system_prompt,
-        user_text=full_context_str, # Pass combined context string
+        user_content=full_context, # Send combined context
         user_files=user_files,
         output_schema=WeeklyUserSummary,
-        allow_function_calling=False # Probably not needed for summary generation
     )
 
     if extracted_data:
@@ -905,7 +1032,7 @@ def collect_weekly_summary(week_start_date: date, workouts: list[WorkoutData], f
         print("Could not extract weekly summary data.")
         return None
 
-def collect_monthly_stats(year: int, month: int, user_data: StaticUserData, workouts: list[WorkoutData]) -> typing.Optional[MonthlyUserStats]:
+def collect_monthly_stats(year: int, month: int, user_data: StaticUserData, workouts: typing.List[WorkoutData]) -> typing.Optional[MonthlyUserStats]:
     """Collects or generates monthly stats."""
     month_str = f"{year}-{month:02d}"
     print(f"\n--- Logging Monthly Stats for {month_str} ---")
@@ -929,7 +1056,7 @@ def collect_monthly_stats(year: int, month: int, user_data: StaticUserData, work
     Base the summary on the provided workout logs and user data.
     Estimate or ask the user for values like current weight, resting/max HR if not available.
     Calculate longest run, average pace (if possible), total elevation etc.
-    The required output format is JSON matching this structure: {MonthlyUserStats.__annotations__}
+    The required output format is JSON matching this structure: {MonthlyUserStatsSchema}
     Set the 'month' field to '{month_str}'.
     """
     prompt = (
@@ -964,12 +1091,11 @@ def collect_monthly_stats(year: int, month: int, user_data: StaticUserData, work
     else:
         full_context.append("User provided no additional input.")
 
-    extracted_data = call_gemini_for_structured_output_langgraph(
+    extracted_data = call_gemini_for_structured_output(
         system_prompt=system_prompt,
-        user_text=full_context_str, # Pass combined context string
+        user_content=full_context,
         user_files=user_files,
         output_schema=MonthlyUserStats,
-        allow_function_calling=True # Allow asking for weight etc.
     )
 
     if extracted_data:
