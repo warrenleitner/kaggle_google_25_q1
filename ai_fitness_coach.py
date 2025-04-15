@@ -74,16 +74,22 @@ print("Gemini client and retry policy initialized.")
 # Helper for date serialization/deserialization
 class DateEncoder(json.JSONEncoder):
     def default(self, obj):
-        if isinstance(obj, date):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, date) and not isinstance(obj, datetime):
             return obj.isoformat()
         return super().default(obj)
 
 def date_decoder(json_dict):
     for key, value in json_dict.items():
-        if isinstance(value, str):
+        if isinstance(value, str) and key in ['date', 'goal_date', 'week_start_date']:
             try:
-                # Attempt to parse dates, handle potential errors gracefully
-                json_dict[key] = datetime.strptime(value, '%Y-%m-%d').date()
+                # First try ISO format with time (YYYY-MM-DDThh:mm:ss)
+                if 'T' in value:
+                    json_dict[key] = datetime.fromisoformat(value)
+                else:
+                    # Try simple date format (YYYY-MM-DD) - set time to midnight
+                    json_dict[key] = datetime.strptime(value, '%Y-%m-%d')
             except ValueError:
                 pass # Keep original string if not a valid date
     return json_dict
@@ -98,7 +104,7 @@ class StaticUserData(typing.TypedDict):
      # --- Goal --- 
     goal: str  # User's primary goal (e.g., "5K", "10K", "Half Marathon", "Marathon", "Ultra", "Other")
     goal_time: typing.Optional[str]  # Target time for the goal (e.g., 2.5 for 2 hours 30 minutes)
-    goal_date: datetime  # Date of the user would like to be ready for their goal. (e.g., "2024-05-15")
+    goal_date: typing.Optional[datetime]  # Date of the user would like to be ready for their goal. (e.g., "2024-05-15")
      # --- Training Preferences (Optional) ---
     preferred_training_days: typing.Optional[typing.List[str]] # Days user prefers to train (e.g., ["Monday", "Wednesday", "Friday", "Sunday"])
     long_run_day: typing.Optional[str] # Preferred day for the weekly long run (e.g., "Saturday")
@@ -159,7 +165,7 @@ StaticUserDataSchema = """
       "type": ["string", "null"]
     }
   },
-   "required": []
+   "required": ["name", "age", "goal"]
 }
 """
 
@@ -420,16 +426,16 @@ class MonthlyUserStats(typing.TypedDict):
     month: str  # Format: "YYYY-MM"
     # --- Optional Physiological Estimates ---
     weight_pounds: float # User's current weight in pounds
-    max_heart_rate_bpm: typing.Optional[int] # Max HR (optional, estimated or tested)
-    resting_heart_rate_bpm: typing.Optional[int] # Resting HR (optional)
-    vo2_max_estimated: typing.Optional[float] # Estimated VO2 Max (optional)
+    max_heart_rate_bpm: int # Max HR (estimated or tested)
+    resting_heart_rate_bpm: int # Resting HR
+    vo2_max_estimated: float # Estimated VO2 Max
     longest_run_distance_miles: float
-    average_pace_minutes_per_mile: typing.Optional[float] # Avg pace for runs this month
-    comfortable_pace_minutes_per_mile: typing.Optional[float] # Comfortable pace for runs this month
-    comfortable_run_distance_miles: typing.Optional[float] # Avg comfortable run distance
-    average_heart_rate_bpm: typing.Optional[int] # Avg HR across workouts with HR data
-    total_elevation_gain_feet: typing.Optional[float] # Total elevation for runs
-    monthly_summary_notes: typing.Optional[str] # Optional field for brief LLM-generated or user notes
+    average_pace_minutes_per_mile: float # Avg pace for runs this month
+    comfortable_pace_minutes_per_mile: float # Comfortable pace for runs this month
+    comfortable_run_distance_miles: float # Avg comfortable run distance
+    average_heart_rate_bpm: int # Avg HR across workouts with HR data
+    total_elevation_gain_feet: float # Total elevation for runs
+    monthly_summary_notes: str # Field for brief LLM-generated or user notes
 
 MonthlyUserStatsSchema = """
 {
@@ -449,18 +455,18 @@ MonthlyUserStatsSchema = """
       "exclusiveMinimum": 0
     },
     "max_heart_rate_bpm": {
-      "description": "Max HR (optional, estimated or tested)",
-      "type": ["integer", "null"],
+      "description": "Max HR (estimated or tested)",
+      "type": "integer",
       "minimum": 0
     },
     "resting_heart_rate_bpm": {
-      "description": "Resting HR (optional)",
-      "type": ["integer", "null"],
+      "description": "Resting HR",
+      "type": "integer",
       "minimum": 0
     },
     "vo2_max_estimated": {
-      "description": "Estimated VO2 Max (optional)",
-      "type": ["number", "null"],
+      "description": "Estimated VO2 Max",
+      "type": "number",
       "minimum": 0
     },
     "longest_run_distance_miles": {
@@ -470,37 +476,46 @@ MonthlyUserStatsSchema = """
     },
     "average_pace_minutes_per_mile": {
       "description": "Avg pace for runs this month",
-      "type": ["number", "null"],
+      "type": "number",
       "minimum": 0
     },
     "comfortable_pace_minutes_per_mile": {
       "description": "Comfortable pace for runs this month",
-      "type": ["number", "null"],
+      "type": "number",
       "minimum": 0
     },
     "comfortable_run_distance_miles": {
       "description": "Avg comfortable run distance",
-      "type": ["number", "null"],
+      "type": "number",
       "minimum": 0
     },
     "average_heart_rate_bpm": {
       "description": "Avg HR across workouts with HR data",
-      "type": ["integer", "null"],
+      "type": "integer",
       "minimum": 0
     },
     "total_elevation_gain_feet": {
       "description": "Total elevation for runs",
-      "type": ["number", "null"]
+      "type": "number"
     },
     "monthly_summary_notes": {
-      "description": "Optional field for brief LLM-generated or user notes",
-      "type": ["string", "null"]
+      "description": "Field for brief LLM-generated or user notes",
+      "type": "string"
     }
   },
   "required": [
     "month",
     "weight_pounds",
-    "longest_run_distance_miles"
+    "max_heart_rate_bpm",
+    "resting_heart_rate_bpm",
+    "vo2_max_estimated",
+    "longest_run_distance_miles",
+    "average_pace_minutes_per_mile",
+    "comfortable_pace_minutes_per_mile",
+    "comfortable_run_distance_miles",
+    "average_heart_rate_bpm",
+    "total_elevation_gain_feet",
+    "monthly_summary_notes"
   ]
 }
 """
@@ -517,7 +532,23 @@ def load_json_data(filepath: Path) -> typing.Union[dict, list, None]:
     try:
         with open(filepath, 'r') as f:
             # Use object_hook for date decoding
-            return json.load(f, object_hook=date_decoder)
+            data = json.load(f, object_hook=date_decoder)
+            
+            # Extra processing for lists of dicts (to handle nested date fields)
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        for key, value in item.items():
+                            if isinstance(value, str) and key in ['date', 'goal_date', 'week_start_date']:
+                                try:
+                                    # Handle ISO format with time
+                                    if 'T' in value:
+                                        item[key] = datetime.fromisoformat(value)
+                                    else:
+                                        item[key] = datetime.strptime(value, '%Y-%m-%d')
+                                except ValueError:
+                                    pass
+            return data
     except (json.JSONDecodeError, IOError) as e:
         print(f"Error loading JSON from {filepath}: {e}")
         return None
@@ -686,11 +717,13 @@ def call_gemini_for_structured_output(
         new_user_text, new_user_files = get_user_input_with_multimodal(prompt)
         # Append the new user input and any uploaded files to the message history
         if new_user_text or new_user_files:
-             messages.append(parse_input_into_messages(new_user_text, new_user_files))
+             return parse_input_into_messages(new_user_text, new_user_files)
         else:
             # Handle case where user provides no input to the clarification request
             # Maybe append a message indicating this? For now, just proceed.
             print("User provided no further input for clarification.")
+        
+        return None
 
     def proceed_to_json_generation():
         """
@@ -701,9 +734,7 @@ def call_gemini_for_structured_output(
         the loop in `call_gemini_for_structured_output` and allows the process
         to proceed to the final JSON generation step.
         """
-        # Note: Uses global `sufficient_info` which might be refactored later
-        nonlocal sufficient_info
-        sufficient_info = True
+        return True
 
     model_name = "gemini-2.0-flash"  # @param ["gemini-2.0-flash-lite","gemini-2.0-flash","gemini-2.5-pro-exp-03-25"] {"allow-input":true}
 
@@ -736,13 +767,14 @@ def call_gemini_for_structured_output(
             messages.append(genai.types.ContentDict(role="user", parts=[genai.types.Part.from_text(text=f"NOTE: System replied with - Function call: {tool_call.name} with args: {tool_call.args}")]))
             if tool_call.name == "proceed_to_json_generation":
                 print(f"Proceeding to JSON generation.")
-                proceed_to_json_generation()
+                sufficient_info = proceed_to_json_generation()
             elif tool_call.name == "request_more_user_info":
                 print(f"Requesting more user info.")
-                request_more_user_info(**tool_call.args)
+                more_info_messages = request_more_user_info(**tool_call.args)
+                if more_info_messages: # Check if the function returned a list
+                    messages.extend(more_info_messages)
             else:
                 print(f"Unknown tool call: {tool_call.name}")
-                messages.append(genai.types.ContentDict(role="user", parts=[genai.types.Part.from_text(text=f"Unknown tool call: {tool_call.name}")]))
         except Exception as e:
             print(f"Error: {e}")
             print(f"Messages: {messages}")
@@ -850,18 +882,18 @@ def collect_static_user_data() -> typing.Optional[StaticUserData]:
         return None
 
 
-def collect_daily_feeling(target_date: date) -> typing.Optional[DailyUserFeeling]:
+def collect_daily_feeling(target_date: datetime) -> typing.Optional[DailyUserFeeling]:
     """Prompts user for daily feeling input."""
-    print(f"\n--- Logging Daily Feeling for {target_date.isoformat()} ---")
+    print(f"\n--- Logging Daily Feeling for {target_date.date().isoformat()} ---")
     system_prompt = f"""
-    You are an AI fitness coach assistant. Collect the user's subjective feeling for {target_date.isoformat()}.
+    You are an AI fitness coach assistant. Collect the user's subjective feeling for {target_date.date().isoformat()}.
     Focus on the ratings (1-5 or 0-5 scales as defined) and any notes.
     The required output format is JSON matching this structure: {DailyUserFeelingSchema}
     Set the 'date' field to {target_date.isoformat()}.
     Remind the user that hydration and nutrition reflect the *previous* day.
     """
     prompt = (
-        f"How are you feeling today ({target_date.isoformat()})?\n"
+        f"How are you feeling today ({target_date.date().isoformat()})?\n"
         "- Overall feeling (1=Very Poor to 5=Excellent)?\n"
         "- Energy level (1=Very Low to 5=Very High)?\n"
         "- Shin pain (0=None to 5=Severe)?\n"
@@ -898,20 +930,19 @@ def collect_daily_feeling(target_date: date) -> typing.Optional[DailyUserFeeling
         return None
 
 
-def collect_workout_data(target_date: date) -> typing.Optional[WorkoutData]:
+def collect_workout_data(target_date: datetime) -> typing.Optional[WorkoutData]:
     """Prompts user for workout data."""
-    print(f"\n--- Logging Workout for {target_date.isoformat()} ---")
+    print(f"\n--- Logging Workout ---")
     system_prompt = f"""
-    You are an AI fitness coach assistant. Collect details about the user's workout completed on {target_date.isoformat()}.
+    You are an AI fitness coach assistant. Collect details about the user's workout completed on {target_date.date().isoformat()}.
     Infer workout_type if not explicitly stated (e.g., 'run', 'strength', 'yoga', 'cycle').
     Extract quantitative data like duration, distance, pace, HR, elevation where provided.
     Capture perceived exertion (RPE 1-10) and specific pain/tightness ratings (0-5).
     Determine adherence percentage (0-100%).
     The required output format is JSON matching this structure: {WorkoutDataSchema}
-    Set the 'date' field to {target_date.isoformat()}.
     """
     prompt = (
-        f"Did you complete a workout today ({target_date.isoformat()})? If yes, please describe it:\n"
+        f"Did you complete a workout today ({target_date.date().isoformat()})? If yes, please describe it:\n"
         "- What type of workout was it (e.g., Easy Run, Tempo Run, Strength, Cycling, Yoga)?\n"
         "- How long did it last (minutes)?\n"
         "- If running/cycling: What distance (miles)? Average pace (min/mile)? Elevation gain (feet)?\n"
@@ -930,20 +961,15 @@ def collect_workout_data(target_date: date) -> typing.Optional[WorkoutData]:
 
     extracted_data = call_gemini_for_structured_output(
         system_prompt=system_prompt,
-        user_content=user_content,
+        user_text=user_text,
+        user_files=user_files,
         output_schema=WorkoutData,
     )
 
     if extracted_data:
         extracted_data['date'] = target_date
         # Basic validation
-        if all(k in extracted_data for k in ['date', 'workout_type', 'perceived_exertion', 'shin_and_knee_pain', 'shin_tightness']):
-             return typing.cast(WorkoutData, extracted_data)
-        else:
-             print("Error: Essential fields missing in extracted workout data.")
-             print(f"Extracted: {extracted_data}")
-             # Fallback: Ask user if they want to save partial data? For now, return None.
-             return None
+        return typing.cast(WorkoutData, extracted_data)
     else:
         print("Could not extract workout data.")
         return None
@@ -958,21 +984,34 @@ def collect_workout_data(target_date: date) -> typing.Optional[WorkoutData]:
 #    about the AI *generating* the summary based on the week's/month's data,
 #    possibly with some user confirmation/input. This is a more advanced step.
 
-def collect_weekly_summary(week_start_date: date, workouts: typing.List[WorkoutData], feelings: typing.List[DailyUserFeeling]) -> typing.Optional[WeeklyUserSummary]:
+def collect_weekly_summary(week_start_date: datetime, workouts: typing.List[WorkoutData], feelings: typing.List[DailyUserFeeling]) -> typing.Optional[WeeklyUserSummary]:
     """Collects or generates a weekly summary."""
-    print(f"\n--- Logging Weekly Summary for week starting {week_start_date.isoformat()} ---")
+    print(f"\n--- Logging Weekly Summary for week starting {week_start_date.date().isoformat()} ---")
 
     # Prepare context from the week's data
-    week_workouts = [w for w in workouts if week_start_date <= w['date'] < week_start_date + timedelta(days=7)]
-    week_feelings = [f for f in feelings if week_start_date <= f['date'] < week_start_date + timedelta(days=7)]
-
+    print(f"Workouts: {workouts}")
+    print(f"Feelings: {feelings}")
+    
+    # Get the end of the week - 6 days after start (inclusive)
+    week_end_date = week_start_date + timedelta(days=6, hours=23, minutes=59, seconds=59)
+    
+    # Filter workouts and feelings for this week
+    week_workouts = [w for w in workouts if 
+                    isinstance(w.get('date'), datetime) and 
+                    week_start_date <= w.get('date') <= week_end_date]
+    
+    week_feelings = [f for f in feelings if 
+                     isinstance(f.get('date'), datetime) and 
+                     week_start_date <= f.get('date') <= week_end_date]
+    
+    print(f"Week workouts: {week_workouts}")
     # Simple aggregation for context
     total_wk_workouts = len(week_workouts)
     total_wk_duration = sum(w.get('actual_duration_minutes', 0) for w in week_workouts)
-    total_wk_distance = sum(w.get('actual_distance_miles', 0) or 0 for w in week_workouts if w.get('workout_type', '').lower() in ['run', 'easy run', 'tempo', 'intervals', 'long run'])
+    total_wk_distance = sum(w.get('actual_distance_miles', 0) or 0 for w in week_workouts if any(run_type in w.get('workout_type', '').lower() for run_type in ['run', 'tempo', 'interval', 'sprint', 'jog']))
 
     system_prompt = f"""
-    You are an AI fitness coach assistant. Generate a concise weekly summary for the user's training week starting {week_start_date.isoformat()}.
+    You are an AI fitness coach assistant. Generate a concise weekly summary for the user's training week starting {week_start_date.date().isoformat()}.
     Base the summary on the provided workout logs and daily feelings for the week.
     Highlight consistency, overall feeling, progress, key achievements (e.g., longest run, PR), and areas needing focus (e.g., recurring pain, missed workouts).
     Calculate quantitative totals.
@@ -981,11 +1020,9 @@ def collect_weekly_summary(week_start_date: date, workouts: typing.List[WorkoutD
     Set 'total_workouts', 'total_running_distance_miles', and 'total_workout_duration_minutes' based on the calculations.
     """
     prompt = (
-        f"Let's summarize your week starting {week_start_date.isoformat()}.\n"
+        f"Let's summarize your week starting {week_start_date.date().isoformat()}.\n"
         f"This week you logged {total_wk_workouts} workouts, totaling {total_wk_duration:.1f} minutes "
         f"and {total_wk_distance:.1f} running miles.\n"
-        f"Workouts: {json.dumps(week_workouts, cls=DateEncoder, indent=2)}\n"
-        f"Daily Feelings: {json.dumps(week_feelings, cls=DateEncoder, indent=2)}\n\n"
         "Based on this, what's your overall summary? Any key achievements or areas to focus on next week? "
         "(The AI will also generate a summary based on the data)."
     )
@@ -993,24 +1030,21 @@ def collect_weekly_summary(week_start_date: date, workouts: typing.List[WorkoutD
     user_text, user_files = get_user_input_with_multimodal(prompt) # Allow user to add their perspective
 
     # Combine AI context and user input
-    full_context = [
-        f"Context for week starting {week_start_date.isoformat()}:\n"
+    full_context = (
+        f"Context for week starting {week_start_date.date().isoformat()}:\n"
         f"Total Workouts: {total_wk_workouts}\n"
         f"Total Duration (min): {total_wk_duration:.1f}\n"
         f"Total Running Distance (miles): {total_wk_distance:.1f}\n"
         f"Workout Details:\n{json.dumps(week_workouts, cls=DateEncoder, indent=2)}\n\n"
         f"Daily Feeling Details:\n{json.dumps(week_feelings, cls=DateEncoder, indent=2)}\n\n"
         "User's input/perspective:"
-    ]
+    )
     if user_text:
-        full_context.append(user_text)
-    else:
-        full_context.append("User provided no additional input.")
-
+        full_context += "\n" + user_text
 
     extracted_data = call_gemini_for_structured_output(
         system_prompt=system_prompt,
-        user_content=full_context, # Send combined context
+        user_text=full_context, # Send combined context
         user_files=user_files,
         output_schema=WeeklyUserSummary,
     )
@@ -1067,9 +1101,9 @@ def collect_monthly_stats(year: int, month: int, user_data: StaticUserData, work
         f"Workout Details: {json.dumps(month_workouts, cls=DateEncoder, indent=2)}\n\n"
         "Please provide or confirm the following for this month:\n"
         "- Current weight (pounds)?\n"
-        "- Resting Heart Rate (BPM) (optional)?\n"
-        "- Max Heart Rate (BPM) (optional, if tested/known)?\n"
-        "- Estimated VO2 Max (optional)?\n"
+        "- Resting Heart Rate (BPM)?\n"
+        "- Max Heart Rate (BPM)?\n"
+        "- Estimated VO2 Max?\n"
         "- Any notes summarizing the month?\n"
         "(The AI will also generate stats based on the data)."
     )
@@ -1077,7 +1111,7 @@ def collect_monthly_stats(year: int, month: int, user_data: StaticUserData, work
     user_text, user_files = get_user_input_with_multimodal(prompt)
 
     # Combine context
-    full_context = [
+    full_context = (
         f"Context for month {month_str}:\n"
         f"User Profile: {json.dumps(user_data, cls=DateEncoder)}\n"
         f"Workouts Logged: {len(month_workouts)}\n"
@@ -1085,15 +1119,13 @@ def collect_monthly_stats(year: int, month: int, user_data: StaticUserData, work
         # Add more calculated fields here as developed
         f"Workout Details:\n{json.dumps(month_workouts, cls=DateEncoder, indent=2)}\n\n"
         "User's input/perspective:"
-    ]
+    )
     if user_text:
-        full_context.extend(user_text)
-    else:
-        full_context.append("User provided no additional input.")
+        full_context += "\n" + user_text
 
     extracted_data = call_gemini_for_structured_output(
         system_prompt=system_prompt,
-        user_content=full_context,
+        user_text=full_context,
         user_files=user_files,
         output_schema=MonthlyUserStats,
     )
@@ -1136,7 +1168,8 @@ def plan_workout(all_data: dict) -> typing.Optional[dict]:
     system_prompt = """
     You are an expert AI running coach. Analyze the provided user data (static info, goals,
     daily feelings, workout logs, weekly summaries, monthly stats) to generate the
-    next logical workout plan for the user.
+    next logical workout plan for the user. Think thoroughly, step by step through the 
+    user's data and goals.
 
     Consider:
     - User's goal, goal date, and current fitness level (inferred from data).
@@ -1146,19 +1179,23 @@ def plan_workout(all_data: dict) -> typing.Optional[dict]:
     - User's preferred training days and long run day.
     - General principles of training periodization (base building, intensity, tapering).
 
-    Output a structured workout plan for the next session or few sessions (e.g., for the next day or two).
-    The plan should include:
-    - Date(s)
-    - Workout Type (e.g., Easy Run, Tempo, Intervals, Strength, Rest)
-    - Description (e.g., 'Run 3 miles at easy pace (RPE 3-4)', 'Warmup, 3x800m @ target pace w/ recovery, Cooldown')
-    - Target Duration/Distance
-    - Target Intensity (e.g., RPE, pace range, heart rate zone)
-    - Specific notes (e.g., 'Focus on form', 'Monitor shin pain closely')
+    Response Format:
+    1. Workout Feedback: 
+        • Concise evaluation of the previous workout.
+    2. Next Week's Plan:
+        • A short table listing workouts for the coming week.
+    3. Missing Data/Inputs:
+        • List any additional data or clarifications you need from me for next time. 
+    4. Detailed Next Workout: 
+        • Provide details on the next scheduled workout and a fallback option, and why this 
+          workout was chosen.
+    5. Goal Progress Status:
+        • Update on how many weeks remain until the user can realistically complete their stated goal, why, and what they can do to improve.
+    6. Summary & Motivation:
+        • A brief summary of my performance, focus areas, and motivational insights.
+        • Include a motivational or funny quote.
 
-    Be prepared to revise the plan based on user feedback. Output the plan as a JSON object
-    with a key like "workout_plan" containing a list of workout objects.
-    Example Workout Object:
-    { "date": "YYYY-MM-DD", "type": "Easy Run", "description": "Run 4 miles at conversational pace", "target_duration_minutes": 40, "target_intensity": "RPE 3-4", "notes": "Focus on hydration before." }
+    Be prepared to revise the plan based on user feedback. Output the plan as markdown.
     """
 
     # Simple interaction loop
@@ -1168,7 +1205,7 @@ def plan_workout(all_data: dict) -> typing.Optional[dict]:
             response = client.models.generate_content(
                 model="gemini-2.0-flash",
                 contents=[system_prompt, f"User Data:\n{context_json}"],
-                generation_config=genai.types.GenerateContentConfig(
+                config=genai.types.GenerateContentConfig(
                     temperature=0.5, # Allow some creativity in planning
                     # No JSON schema here initially, as format is less rigid
                     # response_mime_type="application/json" # Could enforce top-level JSON
@@ -1178,26 +1215,11 @@ def plan_workout(all_data: dict) -> typing.Optional[dict]:
             if response.candidates and response.candidates[0].content.parts:
                  plan_text = response.candidates[0].content.parts[0].text
                  print("\n--- Proposed Workout Plan ---")
-                 print(plan_text)
+                 from rich.console import Console
+                 from rich.markdown import Markdown
+                 console = Console()
+                 console.print(Markdown(plan_text))
                  print("-----------------------------")
-
-                 # Attempt to parse as JSON if possible (if AI followed instructions)
-                 try:
-                     # Look for JSON block within the text
-                     json_start = plan_text.find('{')
-                     json_end = plan_text.rfind('}') + 1
-                     if json_start != -1 and json_end != -1:
-                         plan_json_str = plan_text[json_start:json_end]
-                         workout_plan_data = json.loads(plan_json_str, object_hook=date_decoder)
-                         print("(Successfully parsed plan as JSON)")
-                     else:
-                          workout_plan_data = {"plan_text": plan_text} # Store raw text if not JSON
-                          print("(Plan stored as raw text)")
-
-                 except json.JSONDecodeError:
-                     workout_plan_data = {"plan_text": plan_text} # Store raw text if parse fails
-                     print("(Could not parse plan as JSON, stored as raw text)")
-
 
                  feedback = input("What do you think? Enter feedback, ask questions, or type 'accept': ")
 
@@ -1211,9 +1233,6 @@ def plan_workout(all_data: dict) -> typing.Optional[dict]:
                  else:
                      # Send feedback back to the LLM to refine the plan
                      context_json = json.dumps({"user_data": all_data, "previous_plan": plan_text, "user_feedback": feedback}, cls=DateEncoder)
-                     # Shorten context if needed for follow-up
-                     if len(context_json) > 250000:
-                           context_json = json.dumps({"user_feedback": feedback, "previous_plan_summary": plan_text[:500]}, cls=DateEncoder) # Simplified context
 
                      print("Asking AI to revise plan based on feedback...")
                      # Loop continues
@@ -1309,63 +1328,49 @@ def main():
     initialize_data_files() # Ensure list files exist even if empty
 
     # 2. Check for Missing Data & Prompt User
-    today = date.today()
-    last_daily_log_date = daily_feelings[-1]['date'] if daily_feelings else None
-    last_workout_log_date = workout_data[-1]['date'] if workout_data else None
-
-    # --- Daily Checks ---
-    if last_daily_log_date is None or last_daily_log_date < today:
-        print(f"\nLooks like you haven't logged your feeling for today ({today.isoformat()}).")
-        new_feeling = collect_daily_feeling(today)
-        if new_feeling:
-            daily_feelings.append(new_feeling)
-            save_json_data(DAILY_FEELING_FILE, daily_feelings)
-    else:
-         print(f"\nDaily feeling log is up-to-date ({last_daily_log_date.isoformat()}).")
-
-
-    # Simple check: prompt for workout if feeling logged but workout isn't for today
-    if (last_daily_log_date == today) and (last_workout_log_date is None or last_workout_log_date < today):
-         # More robust check: Did they *actually* workout today? Maybe ask first.
-         ask_workout = input(f"Did you complete a workout today ({today.isoformat()})? (yes/no): ")
-         if ask_workout.lower() == 'yes':
-             new_workout = collect_workout_data(today)
-             if new_workout:
-                 workout_data.append(new_workout)
-                 save_json_data(WORKOUT_DATA_FILE, workout_data)
-         else:
-              print("Okay, no workout logged for today.")
-    elif last_workout_log_date == today:
-         print(f"Workout log is up-to-date ({last_workout_log_date.isoformat()}).")
-
-
-    # --- Weekly Check ---
-    last_monday = today - timedelta(days=today.weekday())
-    last_summary_date = weekly_summaries[-1]['week_start_date'] if weekly_summaries else None
-
-    if last_summary_date is None or last_summary_date < last_monday:
-         # Check if the *previous* week needs summarizing
-         prev_week_start = last_monday - timedelta(days=7)
-         if last_summary_date is None or last_summary_date < prev_week_start:
-             print(f"\nLooks like the summary for the week starting {prev_week_start.isoformat()} is missing.")
-             # Need workouts/feelings from that week to generate summary
-             prev_week_workouts = [w for w in workout_data if prev_week_start <= w['date'] < last_monday]
-             prev_week_feelings = [f for f in daily_feelings if prev_week_start <= f['date'] < last_monday]
-             if prev_week_workouts or prev_week_feelings: # Only summarize if there's data
-                 new_summary = collect_weekly_summary(prev_week_start, workout_data, daily_feelings)
-                 if new_summary:
-                     weekly_summaries.append(new_summary)
-                     save_json_data(WEEKLY_SUMMARY_FILE, weekly_summaries)
-             else:
-                  print(f"(No data found for week {prev_week_start.isoformat()} to summarize)")
-
-    else:
-         print(f"\nWeekly summary is up-to-date (last summary for week starting {last_summary_date.isoformat()}).")
-
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)  # Today at midnight
+    
+    # Ensure date fields are proper datetime objects
+    last_daily_log_date = None
+    if daily_feelings and 'date' in daily_feelings[-1]:
+        date_value = daily_feelings[-1]['date']
+        if isinstance(date_value, datetime):
+            last_daily_log_date = date_value
+        elif isinstance(date_value, date) and not isinstance(date_value, datetime):
+            # Convert date to datetime at midnight
+            last_daily_log_date = datetime.combine(date_value, datetime.min.time())
+        elif isinstance(date_value, str):
+            try:
+                if 'T' in date_value:
+                    last_daily_log_date = datetime.fromisoformat(date_value)
+                else:
+                    last_daily_log_date = datetime.strptime(date_value, '%Y-%m-%d')
+            except ValueError:
+                pass
+    
+    last_workout_log_date = None
+    if workout_data and 'date' in workout_data[-1]:
+        date_value = workout_data[-1]['date']
+        if isinstance(date_value, datetime):
+            last_workout_log_date = date_value
+        elif isinstance(date_value, date) and not isinstance(date_value, datetime):
+            # Convert date to datetime at midnight
+            last_workout_log_date = datetime.combine(date_value, datetime.min.time())
+        elif isinstance(date_value, str):
+            try:
+                if 'T' in date_value:
+                    last_workout_log_date = datetime.fromisoformat(date_value)
+                else:
+                    last_workout_log_date = datetime.strptime(date_value, '%Y-%m-%d')
+            except ValueError:
+                pass
 
     # --- Monthly Check ---
     current_month_str = f"{today.year}-{today.month:02d}"
-    last_month_stat = monthly_stats[-1]['month'] if monthly_stats else None
+    
+    last_month_stat = None
+    if monthly_stats and 'month' in monthly_stats[-1]:
+        last_month_stat = monthly_stats[-1]['month']
 
     if last_month_stat is None or last_month_stat < current_month_str:
          # Check if the *previous* month needs stats
@@ -1381,6 +1386,67 @@ def main():
     else:
          print(f"\nMonthly stats are up-to-date (last stats for {last_month_stat}).")
 
+    # --- Weekly Check ---
+    # Get last Monday at midnight
+    today_date = today.date()
+    last_monday_date = today_date - timedelta(days=today_date.weekday())
+    last_monday = datetime.combine(last_monday_date, datetime.min.time())
+    
+    last_summary_date = None
+    if weekly_summaries and 'week_start_date' in weekly_summaries[-1]:
+        date_value = weekly_summaries[-1]['week_start_date']
+        if isinstance(date_value, datetime):
+            last_summary_date = date_value
+        elif isinstance(date_value, date) and not isinstance(date_value, datetime):
+            # Convert date to datetime at midnight
+            last_summary_date = datetime.combine(date_value, datetime.min.time())
+        elif isinstance(date_value, str):
+            try:
+                if 'T' in date_value:
+                    last_summary_date = datetime.fromisoformat(date_value)
+                else:
+                    last_summary_date = datetime.strptime(date_value, '%Y-%m-%d')
+            except ValueError:
+                pass
+
+    if last_summary_date is None or last_summary_date < last_monday:
+         # Check if the *previous* week needs summarizing
+         prev_week_start_date = last_monday_date - timedelta(days=7)
+         prev_week_start = datetime.combine(prev_week_start_date, datetime.min.time())
+         if last_summary_date is None or last_summary_date < prev_week_start:
+            print(f"\nLooks like the summary for the week starting {prev_week_start.date().isoformat()} is missing.")
+            new_summary = collect_weekly_summary(prev_week_start.date(), workout_data, daily_feelings)
+            if new_summary:
+                weekly_summaries.append(new_summary)
+                save_json_data(WEEKLY_SUMMARY_FILE, weekly_summaries)
+    else:
+         print(f"\nWeekly summary is up-to-date (last summary for week starting {last_summary_date.date().isoformat()}).")
+
+
+    # --- Daily Checks ---
+    if last_daily_log_date is None or last_daily_log_date.date() < today.date():
+        print(f"\nLooks like you haven't logged your feeling for today ({today.date().isoformat()}).")
+        new_feeling = collect_daily_feeling(today)
+        if new_feeling:
+            daily_feelings.append(new_feeling)
+            save_json_data(DAILY_FEELING_FILE, daily_feelings)
+    else:
+         print(f"\nDaily feeling log is up-to-date ({last_daily_log_date.date().isoformat()}).")
+
+
+    # Simple check: prompt for workout if feeling logged but workout isn't for today
+    if (last_daily_log_date and last_daily_log_date.date() == today.date()) and (last_workout_log_date is None or last_workout_log_date.date() < today.date()):
+         # More robust check: Did they *actually* workout today? Maybe ask first.
+         ask_workout = input(f"Did you complete a workout since {last_workout_log_date.date().isoformat() if last_workout_log_date else 'your last entry'}? (yes/no): ")
+         if ask_workout.lower() == 'yes':
+             new_workout = collect_workout_data(today)
+             if new_workout:
+                 workout_data.append(new_workout)
+                 save_json_data(WORKOUT_DATA_FILE, workout_data)
+         else:
+              print("Okay, no workout logged for today.")
+    elif last_workout_log_date and last_workout_log_date.date() == today.date():
+         print(f"Workout log is up-to-date ({last_workout_log_date.date().isoformat()}).")
 
     print("\n--- All data checks complete ---")
 
