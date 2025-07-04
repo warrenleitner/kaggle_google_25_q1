@@ -1,16 +1,16 @@
 [
     {
-        "month": "2025-03",
+        "month": "2025-06",
         "weight_pounds": 200.0,
-        "max_heart_rate_bpm": 196,
-        "resting_heart_rate_bpm": 59,
-        "vo2_max_estimated": 49.43,
-        "longest_run_distance_miles": 7.0,
-        "average_pace_minutes_per_mile": 10.5,
-        "comfortable_pace_minutes_per_mile": 10.5,
-        "comfortable_run_distance_miles": 3.0,
-        "average_heart_rate_bpm": 118,
-        "total_elevation_gain_feet": 3038.0,
-        "monthly_summary_notes": "Based on the provided data, March 2025 was a high-volume month. You ran approximately 30 miles per week, with a longest run of 7 miles. Your average VO2 max was 49.43. Your resting heart rate was 59 bpm, and your average heart rate was 118 bpm. You completed approximately 30 workouts, all of which were running or walking. Your comfortable pace is about 10:30 per mile. The total elevation gain for the month was 3038 feet."
+        "max_heart_rate_bpm": 194,
+        "resting_heart_rate_bpm": 60,
+        "vo2_max_estimated": 40.0,
+        "longest_run_distance_miles": 0.0,
+        "average_pace_minutes_per_mile": 0.0,
+        "comfortable_pace_minutes_per_mile": 0.0,
+        "comfortable_run_distance_miles": 0.0,
+        "average_heart_rate_bpm": 0,
+        "total_elevation_gain_feet": 0.0,
+        "monthly_summary_notes": "No workouts recorded for this month. Focus on building consistency and addressing shin splint issues."
     }
 ]

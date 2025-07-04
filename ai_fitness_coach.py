@@ -122,12 +122,25 @@ else:
     # Running locally - use environment variables
     WORKING_DIR = Path.cwd() / "logs"
     DATA_DIR = Path.cwd() / "data"
+    
+    # Try to load from .env file first
+    env_path = Path.cwd() / ".env"
+    if env_path.exists():
+        with open(env_path, 'r') as f:
+            for line in f:
+                if line.strip() and not line.startswith('#'):
+                    key, value = line.strip().split('=', 1)
+                    if key == 'GOOGLE_API_KEY':
+                        os.environ['GOOGLE_API_KEY'] = value
+                        print("Successfully loaded API key from .env file.")
+                        break
+    
     if os.environ.get("GOOGLE_API_KEY"):
         GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-        print("Successfully configured Gemini API Key from environment variable.")
+        print("Successfully configured Gemini API Key.")
     else:
-        print("No API key found. Please set GOOGLE_API_KEY in your environment variables.")
-        raise ValueError("No API key found. Please set GOOGLE_API_KEY in your environment variables.")
+        print("No API key found. Please set GOOGLE_API_KEY in your .env file or environment variables.")
+        raise ValueError("No API key found. Please set GOOGLE_API_KEY in your .env file or environment variables.")
 
 # %% [markdown]
 # ### Constants
@@ -1306,9 +1319,25 @@ def collect_monthly_stats(year: int, month: int, user_data: StaticUserData, work
     print(f"Analyzing data from {month_start.date().isoformat()} to {month_end.date().isoformat()}")
     
     # Filter workouts data to just this month
-    month_workouts = [w for w in workouts if 
-                     isinstance(w.get('date'), datetime) and 
-                     month_start <= w.get('date') < datetime.combine(next_month_start, datetime.min.time())]
+    month_workouts = []
+    if workouts:
+        for w in workouts:
+            w_date = w.get('date')
+            if isinstance(w_date, datetime):
+                # Handle timezone-aware vs naive datetime comparison
+                if w_date.tzinfo is not None and month_start.tzinfo is None:
+                    w_date = w_date.replace(tzinfo=None)
+                elif w_date.tzinfo is None and month_start.tzinfo is not None:
+                    month_start = month_start.replace(tzinfo=None)
+                
+                month_end_cutoff = datetime.combine(next_month_start, datetime.min.time())
+                if w_date.tzinfo is not None and month_end_cutoff.tzinfo is None:
+                    month_end_cutoff = month_end_cutoff.replace(tzinfo=None)
+                elif w_date.tzinfo is None and month_end_cutoff.tzinfo is not None:
+                    month_end_cutoff = month_end_cutoff.replace(tzinfo=None)
+                
+                if month_start <= w_date < month_end_cutoff:
+                    month_workouts.append(w)
     
     print(f"Found {len(month_workouts)} workouts for the month")
     
@@ -1918,13 +1947,35 @@ def collect_weekly_summary(week_start_date: datetime, workouts: typing.List[Work
     
     # Filter workouts and feelings data to just this week
     print("Filtering workout and feeling data for the week...")
-    week_workouts = [w for w in workouts if 
-                    isinstance(w.get('date'), datetime) and 
-                    week_start_date <= w.get('date') <= week_end_date]
+    week_workouts = []
+    if workouts:
+        for w in workouts:
+            w_date = w.get('date')
+            if isinstance(w_date, datetime):
+                # Handle timezone-aware vs naive datetime comparison
+                if w_date.tzinfo is not None and week_start_date.tzinfo is None:
+                    w_date = w_date.replace(tzinfo=None)
+                elif w_date.tzinfo is None and week_start_date.tzinfo is not None:
+                    week_start_date = week_start_date.replace(tzinfo=None)
+                    week_end_date = week_end_date.replace(tzinfo=None)
+                
+                if week_start_date <= w_date <= week_end_date:
+                    week_workouts.append(w)
     
-    week_feelings = [f for f in feelings if 
-                     isinstance(f.get('date'), datetime) and 
-                     week_start_date <= f.get('date') <= week_end_date]
+    week_feelings = []
+    if feelings:
+        for f in feelings:
+            f_date = f.get('date')
+            if isinstance(f_date, datetime):
+                # Handle timezone-aware vs naive datetime comparison
+                if f_date.tzinfo is not None and week_start_date.tzinfo is None:
+                    f_date = f_date.replace(tzinfo=None)
+                elif f_date.tzinfo is None and week_start_date.tzinfo is not None:
+                    week_start_date = week_start_date.replace(tzinfo=None)
+                    week_end_date = week_end_date.replace(tzinfo=None)
+                
+                if week_start_date <= f_date <= week_end_date:
+                    week_feelings.append(f)
     
     print(f"Found {len(week_workouts)} workouts and {len(week_feelings)} feeling logs for the week")
     
@@ -2300,17 +2351,16 @@ def workout_q_and_a(all_data: typing.Dict[str, typing.Any], workout_plan: str) -
         Be helpful and supportive.
     """
 
-    # Use the Chat API for conversation history (better for Q&A)
-    print("Initializing chat session with Gemini...")
-    chat_client = genai.GenerativeModel(model_name='gemini-2.0-flash', system_instruction=system_prompt)
+    # Initialize conversation context
+    print("Initializing Q&A session with Gemini...")
+    conversation_history = []
     
-    # Initialize chat with context data
-    print("Loading user data and workout plan into chat context...")
-    chat = chat_client.start_chat(history=[
-        {'role': 'user', 'parts': [f"Here is my data and the workout plan we agreed on:\n{context_json}"]},
-        {'role': 'model', 'parts': ["Okay, I have reviewed your data and the workout plan. How can I help you?"]}
-    ])
-    print("Chat session initialized successfully")
+    # Add initial context
+    print("Loading user data and workout plan into context...")
+    initial_context = f"Here is my data and the workout plan we agreed on:\n{context_json}"
+    conversation_history.append({"role": "user", "parts": [initial_context]})
+    conversation_history.append({"role": "model", "parts": ["Okay, I have reviewed your data and the workout plan. How can I help you?"]})
+    print("Q&A session initialized successfully")
 
     # Interactive Q&A loop
     question_count = 0
@@ -2332,15 +2382,31 @@ def workout_q_and_a(all_data: typing.Dict[str, typing.Any], workout_plan: str) -
         try:
             # Send the question to Gemini
             print(f"Processing question #{question_count}: {user_question[:30]}...")
-            response = chat.send_message(user_question, stream=False)
+            
+            # Add user question to conversation history
+            conversation_history.append({"role": "user", "parts": [user_question]})
+            
+            # Generate response using the standard API
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.7,
+                    system_instruction=system_prompt
+                ),
+                contents=conversation_history
+            )
             print("Received response from Gemini")
 
             # Display the response
             if response.candidates and response.candidates[0].content.parts:
                  answer = response.candidates[0].content.parts[0].text
                  print(f"\nAI Coach: {answer}")
+                 
+                 # Add AI response to conversation history
+                 conversation_history.append({"role": "model", "parts": [answer]})
             else:
                  print("AI Coach: Sorry, I couldn't generate a response for that.")
+                 conversation_history.append({"role": "model", "parts": ["Sorry, I couldn't generate a response for that."]})
 
         except Exception as e:
             print(f"Error during Q&A: {e}")

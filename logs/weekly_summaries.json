@@ -1,17 +1,11 @@
 [
     {
-        "week_start_date": "2025-04-07",
-        "overall_summary": "Second week back to consistent workouts after a break. Good progress and consistency. Proud of running even when tired and on travel days.",
-        "key_achievements": [
-            "Consistent workouts",
-            "Running while tired",
-            "Running on travel days"
-        ],
-        "areas_for_focus": [
-            "Improve sleep"
-        ],
-        "total_workouts": 8,
-        "total_running_distance_miles": 18.62443376123,
-        "total_workout_duration_minutes": 446.84616666666665
+        "week_start_date": "2025-06-23T00:00:00",
+        "overall_summary": "Starting fresh with cautious optimism about potential and commitment.",
+        "key_achievements": null,
+        "areas_for_focus": null,
+        "total_workouts": 0,
+        "total_running_distance_miles": null,
+        "total_workout_duration_minutes": null
     }
 ]

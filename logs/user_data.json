@@ -1,12 +1,14 @@
 {
     "name": "Warren",
-    "age": 30,
+    "age": 31,
     "height_inches": 72.0,
     "gender": "male",
-    "goal": "Run a marathon without stopping to walk",
-    "goal_time": null,
-    "goal_date": "2024-12-01T00:00:00Z",
-    "preferred_training_days": null,
-    "long_run_day": "Saturday",
-    "notes": "History of shin splints and tightness in shins. Struggles with motivation for strength training. Has run a half marathon in 1:51 a year ago. Can run a 10k in an hour. Currently runs about 25 miles a week."
+    "goal": "Improve 5k time",
+    "goal_time": "22:00",
+    "goal_date": "2025-12-31T00:00:00+00:00",
+    "preferred_training_days": [
+        "Every other day"
+    ],
+    "long_run_day": "Weekend",
+    "notes": "History of shin splints and tightness. Struggles with motivation for strength training. Previous half marathon experience. Very little recent running. Main focus, moreso eventhan 5k, is just building motivation and consistency and dealing with setbacks"
 }

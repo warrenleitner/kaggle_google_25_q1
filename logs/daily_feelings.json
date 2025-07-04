@@ -1,68 +1,13 @@
 [
     {
-        "date": "2025-04-14T00:00:00",
-        "overall_feeling": 4,
-        "energy_level": 4,
-        "shin_pain": 2,
-        "sleep_quality": 2,
-        "stress_level": 2,
-        "hydration_level": 3,
-        "nutrition_quality": 2,
-        "notes": "Plenty of carbs and protein."
-    },
-    {
-        "date": "2024-01-23T12:00:00+00:00",
-        "overall_feeling": 4,
+        "date": "2025-07-04T17:01:23+00:00",
+        "overall_feeling": 3,
         "energy_level": 3,
-        "shin_pain": 1,
-        "sleep_quality": 3,
+        "shin_pain": 0,
+        "sleep_quality": 4,
         "stress_level": 2,
-        "hydration_level": 3,
+        "hydration_level": 5,
         "nutrition_quality": 3,
-        "notes": null
-    },
-    {
-        "date": "2024-02-29T12:00:00+00:00",
-        "overall_feeling": 4,
-        "energy_level": 3,
-        "shin_pain": 1,
-        "sleep_quality": 3,
-        "stress_level": 2,
-        "hydration_level": 3,
-        "nutrition_quality": 3,
-        "notes": null
-    },
-    {
-        "date": "2024-02-29T12:00:00+00:00",
-        "overall_feeling": 4,
-        "energy_level": 3,
-        "shin_pain": 1,
-        "sleep_quality": 3,
-        "stress_level": 2,
-        "hydration_level": 3,
-        "nutrition_quality": 3,
-        "notes": null
-    },
-    {
-        "date": "2024-02-29T12:00:00+00:00",
-        "overall_feeling": 4,
-        "energy_level": 3,
-        "shin_pain": 1,
-        "sleep_quality": 3,
-        "stress_level": 2,
-        "hydration_level": 3,
-        "nutrition_quality": 3,
-        "notes": null
-    },
-    {
-        "date": "2024-02-29T12:00:00+00:00",
-        "overall_feeling": 4,
-        "energy_level": 3,
-        "shin_pain": 1,
-        "sleep_quality": 3,
-        "stress_level": 2,
-        "hydration_level": 3,
-        "nutrition_quality": 3,
-        "notes": null
+        "notes": "Starting from scratch so recommend a benchmark run today."
     }
 ]
