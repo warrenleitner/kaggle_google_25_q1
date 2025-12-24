@@ -161,6 +161,11 @@ WORKOUT_PLAN_FILE = WORKING_DIR / "current_workout_plan.json"  # Latest workout 
 # Borrow retry method from the labs
 
 # %%
+# Model configuration - change this to switch between models
+# MODEL_NAME = "gemini-2.0-flash"
+MODEL_NAME = "gemini-2.5-pro"      # Alternative: More capable but slower
+# MODEL_NAME = "gemini-2.5-flash"    # Alternative: Faster with good performance
+
 # Initialize the client with API key and configure retry logic for resilience
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
@@ -592,7 +597,7 @@ def call_gemini_for_structured_output(
     sufficient_info = False
 
     # Set the model to use
-    model_name = "gemini-2.0-flash"
+    model_name = MODEL_NAME
     print(f"Using model: {model_name}")
 
     # Information gathering loop - runs until sufficient info or max loops reached
@@ -658,7 +663,7 @@ def call_gemini_for_structured_output(
     
     print("Sending request to Gemini for structured output generation...")
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model=MODEL_NAME,
         config=genai.types.GenerateContentConfig(
             temperature=0.2, # Lower temp for more deterministic JSON extraction
             response_mime_type="application/json",
@@ -1434,7 +1439,10 @@ def collect_monthly_stats(year: int, month: int, user_data: StaticUserData, work
     print(summary_text)
     
     # System prompt for the AI
+    current_date = datetime.now().strftime("%B %d, %Y")
     system_prompt = f"""
+        IMPORTANT: Today's date is {current_date}. Use this for all time calculations and analysis.
+        
         You are an AI fitness coach assistant. Create monthly statistics for {year}-{month:02d} based on workout logs.
         Focus on key fitness metrics and indicators.
         The required output format is JSON matching this structure: {MonthlyUserStatsSchema}
@@ -1994,7 +2002,10 @@ def collect_weekly_summary(week_start_date: datetime, workouts: typing.List[Work
     print(f"Weekly totals: {total_wk_workouts} workouts, {total_wk_duration:.1f} minutes, {total_wk_distance:.1f} running miles")
 
     # System prompt for the AI
+    current_date = datetime.now().strftime("%B %d, %Y")
     system_prompt = f"""
+        IMPORTANT: Today's date is {current_date}. Use this for all time calculations and analysis.
+        
         You are an AI fitness coach assistant. Generate a concise weekly summary for the user's training week starting {week_start_date.date().isoformat()}.
         Base the summary on the provided workout logs and daily feelings for the week.
         Highlight consistency, overall feeling, progress, key achievements (e.g., longest run, PR), and areas needing focus (e.g., recurring pain, missed workouts).
@@ -2212,7 +2223,10 @@ def plan_workout(all_data: typing.Dict[str, typing.Any]) -> typing.Optional[str]
         print(f"Context size: {len(context_json)} characters")
 
     # System prompt instructing the AI how to create the workout plan
-    system_prompt = """
+    current_date = datetime.now().strftime("%B %d, %Y")
+    system_prompt = f"""
+        IMPORTANT: Today's date is {current_date}. Use this for all time calculations and planning.
+        
         You are an expert AI running coach. Analyze the provided user data (static info, goals,
         daily feelings, workout logs, weekly summaries, monthly stats) to generate the
         next logical workout plan for the user. Think thoroughly, step by step through the 
@@ -2254,7 +2268,7 @@ def plan_workout(all_data: typing.Dict[str, typing.Any]) -> typing.Optional[str]
             # Call Gemini to generate the workout plan
             print("Sending request to Gemini to generate workout plan...")
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=MODEL_NAME,
                 contents=[system_prompt, f"User Data:\n{context_json}"],
                 config=genai.types.GenerateContentConfig(
                     temperature=0.5, # Allow some creativity in planning
@@ -2341,7 +2355,10 @@ def workout_q_and_a(all_data: typing.Dict[str, typing.Any], workout_plan: str) -
         print(f"Context size: {len(context_json)} characters")
 
     # System prompt for the AI
-    system_prompt = """
+    current_date = datetime.now().strftime("%B %d, %Y")
+    system_prompt = f"""
+        IMPORTANT: Today's date is {current_date}. Use this for all time calculations and planning.
+        
         You are an AI fitness coach assistant. The user has accepted a workout plan.
         Your role now is to answer the user's questions clearly and concisely.
         Refer to the user's complete data history (profile, goals, logs, summaries, stats)
@@ -2388,7 +2405,7 @@ def workout_q_and_a(all_data: typing.Dict[str, typing.Any], workout_plan: str) -
             
             # Generate response using the standard API
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=MODEL_NAME,
                 config=genai.types.GenerateContentConfig(
                     temperature=0.7,
                     system_instruction=system_prompt

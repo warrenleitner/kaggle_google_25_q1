@@ -9,5 +9,16 @@
         "hydration_level": 5,
         "nutrition_quality": 3,
         "notes": "Starting from scratch so recommend a benchmark run today."
+    },
+    {
+        "date": "2024-05-24T12:00:00+00:00",
+        "overall_feeling": 4,
+        "energy_level": 4,
+        "shin_pain": 0,
+        "sleep_quality": 3,
+        "stress_level": 3,
+        "hydration_level": 3,
+        "nutrition_quality": 2,
+        "notes": null
     }
 ]
